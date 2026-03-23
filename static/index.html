@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple RAG</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; padding: 20px; max-width: 900px; margin: 0 auto; }
+        h1 { margin-bottom: 24px; font-size: 28px; }
+        h2 { margin-bottom: 12px; font-size: 18px; color: #555; }
+        .section { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; font-size: 14px; }
+        .settings-grid dt { color: #888; }
+        .settings-grid dd { font-family: monospace; word-break: break-all; }
+        label { display: block; font-size: 14px; color: #555; margin-bottom: 4px; }
+        input[type="text"], input[type="number"], input[type="file"] { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; margin-bottom: 12px; }
+        .row { display: flex; gap: 12px; }
+        .row > div { flex: 1; }
+        button { background: #2563eb; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+        button:hover { background: #1d4ed8; }
+        button:disabled { background: #93c5fd; cursor: not-allowed; }
+        .drop-zone { border: 2px dashed #ccc; border-radius: 8px; padding: 32px; text-align: center; color: #888; cursor: pointer; margin-bottom: 12px; transition: border-color 0.2s; }
+        .drop-zone.dragover { border-color: #2563eb; color: #2563eb; }
+        .drop-zone.has-file { border-color: #16a34a; color: #16a34a; }
+        .result-card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px; margin-bottom: 8px; }
+        .result-meta { font-size: 12px; color: #888; margin-bottom: 4px; }
+        .result-text { font-size: 14px; white-space: pre-wrap; }
+        .status { font-size: 14px; margin-top: 8px; padding: 8px; border-radius: 4px; }
+        .status.ok { background: #dcfce7; color: #166534; }
+        .status.error { background: #fee2e2; color: #991b1b; }
+        .status.loading { background: #dbeafe; color: #1e40af; }
+        #results-list { margin-top: 12px; }
+        .range-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+        .range-row input[type="range"] { flex: 1; margin: 0; }
+        .range-row span { min-width: 24px; text-align: right; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <h1>Simple RAG</h1>
+
+    <!-- Settings -->
+    <div class="section">
+        <h2>Settings</h2>
+        <dl class="settings-grid" id="settings">
+            <dt>Loading...</dt><dd></dd>
+        </dl>
+    </div>
+
+    <!-- Upload -->
+    <div class="section">
+        <h2>Upload Document</h2>
+        <div class="drop-zone" id="drop-zone">
+            Drop .md file here or click to select
+            <input type="file" id="file-input" accept=".md" hidden>
+        </div>
+        <div class="row">
+            <div>
+                <label>Chunk size (chars)</label>
+                <input type="number" id="chunk-size" value="500" min="100" max="5000">
+            </div>
+            <div>
+                <label>Chunk overlap (chars)</label>
+                <input type="number" id="chunk-overlap" value="50" min="0" max="1000">
+            </div>
+        </div>
+        <button id="upload-btn" disabled>Upload & Index</button>
+        <div id="upload-status"></div>
+    </div>
+
+    <!-- Search -->
+    <div class="section">
+        <h2>Search</h2>
+        <label>Query</label>
+        <input type="text" id="query" placeholder="Enter your search query...">
+        <div class="range-row">
+            <label style="margin:0">Top K:</label>
+            <input type="range" id="top-k" min="1" max="20" value="5">
+            <span id="top-k-val">5</span>
+        </div>
+        <button id="search-btn">Search</button>
+        <div id="search-status"></div>
+        <div id="results-list"></div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const uploadBtn = document.getElementById('upload-btn');
+        const uploadStatus = document.getElementById('upload-status');
+        const searchBtn = document.getElementById('search-btn');
+        const searchStatus = document.getElementById('search-status');
+        const resultsList = document.getElementById('results-list');
+        const topKSlider = document.getElementById('top-k');
+        const topKVal = document.getElementById('top-k-val');
+
+        let selectedFile = null;
+
+        // Settings
+        fetch('/api/settings').then(r => r.json()).then(data => {
+            const el = document.getElementById('settings');
+            el.innerHTML = `
+                <dt>Embedding URL</dt><dd>${data.embedding_base_url}</dd>
+                <dt>LLM URL</dt><dd>${data.llm_base_url}</dd>
+                <dt>Embedding Model</dt><dd>${data.embedding_model}</dd>
+                <dt>Qdrant URL</dt><dd>${data.qdrant_url}</dd>
+            `;
+        });
+
+        // Top K slider
+        topKSlider.addEventListener('input', () => { topKVal.textContent = topKSlider.value; });
+
+        // File drop
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', e => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.name.endsWith('.md')) setFile(file);
+        });
+        fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+
+        function setFile(file) {
+            selectedFile = file;
+            dropZone.textContent = file.name;
+            dropZone.classList.add('has-file');
+            uploadBtn.disabled = false;
+        }
+
+        function showStatus(el, msg, type) {
+            el.innerHTML = `<div class="status ${type}">${msg}</div>`;
+        }
+
+        // Upload
+        uploadBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+            uploadBtn.disabled = true;
+            showStatus(uploadStatus, 'Uploading & indexing...', 'loading');
+
+            const form = new FormData();
+            form.append('file', selectedFile);
+            form.append('chunk_size', document.getElementById('chunk-size').value);
+            form.append('chunk_overlap', document.getElementById('chunk-overlap').value);
+
+            try {
+                const resp = await fetch('/api/upload', { method: 'POST', body: form });
+                const data = await resp.json();
+                if (resp.ok) {
+                    showStatus(uploadStatus, data.message, 'ok');
+                } else {
+                    showStatus(uploadStatus, data.error || 'Upload failed', 'error');
+                }
+            } catch (e) {
+                showStatus(uploadStatus, e.message, 'error');
+            }
+            uploadBtn.disabled = false;
+        });
+
+        // Search
+        searchBtn.addEventListener('click', async () => {
+            const query = document.getElementById('query').value.trim();
+            if (!query) return;
+            searchBtn.disabled = true;
+            showStatus(searchStatus, 'Searching...', 'loading');
+            resultsList.innerHTML = '';
+
+            const form = new FormData();
+            form.append('query', query);
+            form.append('top_k', topKSlider.value);
+
+            try {
+                const resp = await fetch('/api/search', { method: 'POST', body: form });
+                const data = await resp.json();
+                if (resp.ok) {
+                    searchStatus.innerHTML = '';
+                    if (data.results.length === 0) {
+                        showStatus(searchStatus, 'No results found', 'loading');
+                    } else {
+                        resultsList.innerHTML = data.results.map((r, i) => `
+                            <div class="result-card">
+                                <div class="result-meta">#${i+1} &middot; ${r.filename} &middot; chunk ${r.chunk_index} &middot; score: ${r.score.toFixed(4)}</div>
+                                <div class="result-text">${escapeHtml(r.text)}</div>
+                            </div>
+                        `).join('');
+                    }
+                } else {
+                    showStatus(searchStatus, data.detail || 'Search failed', 'error');
+                }
+            } catch (e) {
+                showStatus(searchStatus, e.message, 'error');
+            }
+            searchBtn.disabled = false;
+        });
+
+        // Enter to search
+        document.getElementById('query').addEventListener('keydown', e => {
+            if (e.key === 'Enter') searchBtn.click();
+        });
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
