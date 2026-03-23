@@ -103,6 +103,7 @@
                 <dt>Embedding URL</dt><dd>${data.embedding_base_url}</dd>
                 <dt>LLM URL</dt><dd>${data.llm_base_url}</dd>
                 <dt>Embedding Model</dt><dd>${data.embedding_model}</dd>
+                <dt>LLM Model</dt><dd>${data.llm_model}</dd>
                 <dt>Qdrant URL</dt><dd>${data.qdrant_url}</dd>
             `;
         });
@@ -150,7 +151,7 @@
                 if (resp.ok) {
                     showStatus(uploadStatus, data.message, 'ok');
                 } else {
-                    showStatus(uploadStatus, data.error || 'Upload failed', 'error');
+                    showStatus(uploadStatus, data.error || data.detail || 'Upload failed', 'error');
                 }
             } catch (e) {
                 showStatus(uploadStatus, e.message, 'error');
@@ -186,7 +187,7 @@
                         `).join('');
                     }
                 } else {
-                    showStatus(searchStatus, data.detail || 'Search failed', 'error');
+                    showStatus(searchStatus, data.error || data.detail || 'Search failed', 'error');
                 }
             } catch (e) {
                 showStatus(searchStatus, e.message, 'error');

@@ -15,6 +15,7 @@ EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "http://localhost:8080/v1")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8081/v1")
 API_KEY = os.getenv("API_KEY", "")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 
 COLLECTION_NAME = "documents"
@@ -69,7 +70,13 @@ async def upload_document(
     if not chunks:
         return JSONResponse({"error": "No content to index"}, status_code=400)
 
-    embeddings = await get_embeddings(chunks)
+    try:
+        embeddings = await get_embeddings(chunks)
+    except httpx.HTTPStatusError as e:
+        return JSONResponse(
+            {"error": f"Embedding API error: {e.response.status_code} {e.response.text}"},
+            status_code=502,
+        )
 
     ensure_collection(len(embeddings[0]))
 
@@ -89,7 +96,13 @@ async def upload_document(
 
 @app.post("/api/search")
 async def search(query: str = Form(...), top_k: int = Form(5)):
-    embeddings = await get_embeddings([query])
+    try:
+        embeddings = await get_embeddings([query])
+    except httpx.HTTPStatusError as e:
+        return JSONResponse(
+            {"error": f"Embedding API error: {e.response.status_code} {e.response.text}"},
+            status_code=502,
+        )
     query_vector = embeddings[0]
 
     results = qdrant.query_points(
@@ -118,6 +131,7 @@ async def get_settings():
         "embedding_base_url": EMBEDDING_BASE_URL,
         "llm_base_url": LLM_BASE_URL,
         "embedding_model": EMBEDDING_MODEL,
+        "llm_model": LLM_MODEL,
         "qdrant_url": QDRANT_URL,
     }
 
